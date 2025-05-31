@@ -935,6 +935,15 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // repeat a to the specified shape
+    GGML_API struct ggml_tensor * ggml_repeat_4d(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+                       int64_t    ne0,
+                       int64_t    ne1,
+                       int64_t    ne2,
+                       int64_t    ne3);
+
     // sums repetitions in a into shape of b
     GGML_API struct ggml_tensor * ggml_repeat_back(
             struct ggml_context * ctx,
@@ -2172,6 +2181,7 @@ extern "C" {
 
     // scheduling priorities
     enum ggml_sched_priority {
+        GGML_SCHED_PRIO_LOW = -1,
         GGML_SCHED_PRIO_NORMAL,
         GGML_SCHED_PRIO_MEDIUM,
         GGML_SCHED_PRIO_HIGH,
