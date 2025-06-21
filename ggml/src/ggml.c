@@ -133,7 +133,7 @@ static void ggml_print_backtrace_symbols(void) {
 }
 #endif
 
-static void ggml_print_backtrace(void) {
+void ggml_print_backtrace(void) {
     const char * GGML_NO_BACKTRACE = getenv("GGML_NO_BACKTRACE");
     if (GGML_NO_BACKTRACE) {
         return;
@@ -160,6 +160,10 @@ static void ggml_print_backtrace(void) {
     const int parent_pid = getpid();
     const int child_pid = fork();
     if (child_pid < 0) { // error
+#if defined(__linux__)
+        close(lock[1]);
+        close(lock[0]);
+#endif
         return;
     } else if (child_pid == 0) { // child
         char attach[32];
@@ -167,6 +171,7 @@ static void ggml_print_backtrace(void) {
 #if defined(__linux__)
         close(lock[1]);
         (void) !read(lock[0], lock, 1);
+        close(lock[0]);
 #endif
         // try gdb
         execlp("gdb", "gdb", "--batch",
@@ -195,7 +200,7 @@ static void ggml_print_backtrace(void) {
     }
 }
 #else
-static void ggml_print_backtrace(void) {
+void ggml_print_backtrace(void) {
     // platform not supported
 }
 #endif
@@ -215,6 +220,8 @@ void ggml_abort(const char * file, int line, const char * fmt, ...) {
     ggml_print_backtrace();
     abort();
 }
+
+// ggml_print_backtrace is registered with std::set_terminate by ggml.cpp
 
 //
 // logging
@@ -881,12 +888,6 @@ struct ggml_context {
     struct ggml_object * objects_end;
 };
 
-struct ggml_context_container {
-    bool used;
-
-    struct ggml_context context;
-};
-
 //
 // data types
 //
@@ -954,6 +955,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "UPSCALE",
     "PAD",
     "PAD_REFLECT_1D",
+    "ROLL",
     "ARANGE",
     "TIMESTEP_EMBEDDING",
     "ARGSORT",
@@ -984,7 +986,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_ADAMW",
 };
 
-static_assert(GGML_OP_COUNT == 82, "GGML_OP_COUNT != 82");
+static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1049,6 +1051,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "upscale(x)",
     "pad(x)",
     "pad_reflect_1d(x)",
+    "roll(x)",
     "arange(start, stop, step)",
     "timestep_embedding(timesteps, dim, max_period)",
     "argsort(x)",
@@ -1079,7 +1082,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "adamw(x)",
 };
 
-static_assert(GGML_OP_COUNT == 82, "GGML_OP_COUNT != 82");
+static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -2305,6 +2308,26 @@ struct ggml_tensor * ggml_repeat(
     GGML_ASSERT(ggml_can_repeat(a, b));
 
     struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, b->ne);
+
+    result->op     = GGML_OP_REPEAT;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_repeat_4d(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
+    const bool can_repeat = ggml_is_empty(a) || (
+        (ne0 % a->ne[0] == 0) &&
+        (ne1 % a->ne[1] == 0) &&
+        (ne2 % a->ne[2] == 0) &&
+        (ne3 % a->ne[3] == 0)
+    );
+    GGML_ASSERT(can_repeat);
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ne0, ne1, ne2, ne3);
 
     result->op     = GGML_OP_REPEAT;
     result->src[0] = a;
@@ -4315,6 +4338,34 @@ struct ggml_tensor * ggml_pad_reflect_1d(
     ggml_set_op_params(result, params, sizeof(params));
 
     result->op     = GGML_OP_PAD_REFLECT_1D;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_roll
+
+struct ggml_tensor * ggml_roll(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   shift0,
+        int                   shift1,
+        int                   shift2,
+        int                   shift3) {
+    GGML_ASSERT(a->nb[0] == ggml_type_size(a->type));
+    GGML_ASSERT(abs(shift0) < a->ne[0]);
+    GGML_ASSERT(abs(shift1) < a->ne[1]);
+    GGML_ASSERT(abs(shift2) < a->ne[2]);
+    GGML_ASSERT(abs(shift3) < a->ne[3]);
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, shift0);
+    ggml_set_op_params_i32(result, 1, shift1);
+    ggml_set_op_params_i32(result, 2, shift2);
+    ggml_set_op_params_i32(result, 3, shift3);
+
+    result->op     = GGML_OP_ROLL;
     result->src[0] = a;
 
     return result;
